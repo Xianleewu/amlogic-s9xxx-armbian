@@ -1,0 +1,5 @@
+LABEL Armbian
+  LINUX /Image
+  INITRD /uInitrd
+  FDT /dtb/rockchip/rk3588-zettlab-d-series.dtb
+  APPEND root=LABEL=ROOTFS earlycon=uart8250,mmio32,0xfeb50000 keep_bootcon console=tty1 no_console_suspend consoleblank=0 loglevel=7 fsck.fix=yes fsck.repair=yes net.ifnames=0 max_loop=128 zettlab_noverify_uboot=1

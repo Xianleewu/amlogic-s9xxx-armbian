@@ -743,6 +743,15 @@ make_image() {
     board_release="${different_files}/${board}/rootfs/${board_release_file}"
     [[ -f "${board_release}" ]] && source ${board_release}
 
+    boot_part_num="1"
+    root_part_num="2"
+    rockchip_uboot_part="no"
+    [[ "${PLATFORM}" == "rockchip" && "${board}" =~ ^zettlab-d[46]$ ]] && {
+        rockchip_uboot_part="yes"
+        boot_part_num="2"
+        root_part_num="3"
+    }
+
     # echo -e "${INFO} The [ ${board} ] Armbian image partition status: [ skip:${skip_mb} / boot:${boot_mb} / rootfs:${root_mb} ] MiB."
 
     # Set Armian file name
@@ -754,8 +763,11 @@ make_image() {
     truncate -s ${IMG_SIZE}M "${build_image_file}" >/dev/null 2>&1
 
     parted -s "${build_image_file}" mklabel ${partition_table_type} 2>/dev/null
+    [[ "${rockchip_uboot_part}" == "yes" ]] && parted -s "${build_image_file}" mkpart uboot 8MiB 12MiB 2>/dev/null
     parted -s "${build_image_file}" mkpart primary ${bootfs_type} $((skip_mb))MiB $((skip_mb + boot_mb - 1))MiB 2>/dev/null
     parted -s "${build_image_file}" mkpart primary ${rootfs_type} $((skip_mb + boot_mb))MiB 100% 2>/dev/null
+    [[ "${rockchip_uboot_part}" == "yes" && "${partition_table_type}" == "gpt" ]] && \
+        parted -s "${build_image_file}" set ${boot_part_num} legacy_boot on 2>/dev/null || true
 
     loop_new="$(losetup -P -f --show "${build_image_file}")"
     [[ -n "${loop_new}" ]] || error_msg "losetup ${build_image_file} failed."
@@ -771,16 +783,16 @@ make_image() {
 
     # Format bootfs partition
     if [[ "${bootfs_type}" == "fat32" ]]; then
-        mkfs.vfat -F 32 -n "BOOT" ${loop_new}p1 >/dev/null 2>&1
+        mkfs.vfat -F 32 -n "BOOT" ${loop_new}p${boot_part_num} >/dev/null 2>&1
     else
-        mkfs.ext4 -F -q -U ${BOOT_UUID} -L "BOOT" -b 4k -m 0 ${loop_new}p1 >/dev/null 2>&1
+        mkfs.ext4 -F -q -U ${BOOT_UUID} -L "BOOT" -b 4k -m 0 -O ^64bit,^metadata_csum ${loop_new}p${boot_part_num} >/dev/null 2>&1
     fi
 
     # Format rootfs partition
     if [[ "${rootfs_type}" == "btrfs" ]]; then
-        mkfs.btrfs -f -U ${ROOTFS_UUID} -L "ROOTFS" -m single ${loop_new}p2 >/dev/null 2>&1
+        mkfs.btrfs -f -U ${ROOTFS_UUID} -L "ROOTFS" -m single ${loop_new}p${root_part_num} >/dev/null 2>&1
     else
-        mkfs.ext4 -F -q -U ${ROOTFS_UUID} -L "ROOTFS" -b 4k -m 0 ${loop_new}p2 >/dev/null 2>&1
+        mkfs.ext4 -F -q -U ${ROOTFS_UUID} -L "ROOTFS" -b 4k -m 0 ${loop_new}p${root_part_num} >/dev/null 2>&1
     fi
 
     # Write the specific bootloader for [ Amlogic ] boxes
@@ -852,16 +864,16 @@ copy_files() {
 
     # Mount bootfs
     if [[ "${bootfs_type}" == "fat32" ]]; then
-        mount_try vfat ${loop_new}p1 ${tag_bootfs}
+        mount_try vfat ${loop_new}p${boot_part_num} ${tag_bootfs}
     else
-        mount_try ext4 ${loop_new}p1 ${tag_bootfs}
+        mount_try ext4 ${loop_new}p${boot_part_num} ${tag_bootfs}
     fi
 
     # Mount rootfs
     if [[ "${rootfs_type}" == "btrfs" ]]; then
-        mount_try btrfs ${loop_new}p2 ${tag_rootfs}
+        mount_try btrfs ${loop_new}p${root_part_num} ${tag_rootfs}
     else
-        mount_try ext4 ${loop_new}p2 ${tag_rootfs}
+        mount_try ext4 ${loop_new}p${root_part_num} ${tag_rootfs}
     fi
 
     # Copy the full Armbian image
@@ -916,7 +928,7 @@ replace_kernel() {
     tar -mxzf ${kernel_boot} -C ${tag_bootfs}
     [[ "${PLATFORM}" == "allwinner" ]] && (cd ${tag_bootfs} && cp -f uInitrd-${kernel_name} uInitrd && cp -f vmlinuz-${kernel_name} Image)
     [[ "${PLATFORM}" == "amlogic" ]] && (cd ${tag_bootfs} && cp -f uInitrd-${kernel_name} uInitrd && cp -f vmlinuz-${kernel_name} zImage)
-    [[ "${PLATFORM}" == "rockchip" ]] && (cd ${tag_bootfs} && ln -sf uInitrd-${kernel_name} uInitrd && ln -sf vmlinuz-${kernel_name} Image)
+    [[ "${PLATFORM}" == "rockchip" ]] && (cd ${tag_bootfs} && cp -f uInitrd-${kernel_name} uInitrd && cp -f vmlinuz-${kernel_name} Image)
     [[ "$(ls ${tag_bootfs}/*${kernel_name} -l 2>/dev/null | grep "^-" | wc -l)" -ge "2" ]] || error_msg "The /boot files is missing."
     [[ "${PLATFORM}" == "amlogic" ]] && get_textoffset "${tag_bootfs}/zImage"
 
@@ -992,6 +1004,15 @@ refactor_bootfs() {
             -e "s|sun.*.dtb|${FDTFILE}|g" \
             -e "s|rk.*.dtb|${FDTFILE}|g" \
             "${boot_extlinux_file}"
+        [[ "${board}" =~ ^zettlab-d[46]$ ]] && {
+            sed -i '/^[[:space:]]*menu[[:space:]]/Id' "${boot_extlinux_file}"
+            sed -i 's|console=ttyS2,1500000[[:space:]]*||g' "${boot_extlinux_file}"
+            sed -i 's|console=tty1|console=ttyFIQ0 console=tty1|g' "${boot_extlinux_file}"
+            grep -qi '^default[[:space:]]' "${boot_extlinux_file}" || sed -i '1idefault Armbian' "${boot_extlinux_file}"
+            grep -qi '^timeout[[:space:]]' "${boot_extlinux_file}" || sed -i '2itimeout 1' "${boot_extlinux_file}"
+        }
+        [[ "${board}" =~ ^zettlab-d[46]$ && -f "initrd.img-${kernel_name}" ]] && \
+            sed -i "s|^\([[:space:]]*INITRD \).*|\1/initrd.img-${kernel_name}|g" "${boot_extlinux_file}"
         # If needed, such as t95z(s905x), rename delete .bak
         [[ "${BOOT_CONF}" == "extlinux.conf" ]] && mv -f "${boot_extlinux_file}" "${rename_extlinux_file}"
     }
