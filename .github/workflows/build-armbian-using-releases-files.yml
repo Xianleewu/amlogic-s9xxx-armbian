@@ -277,7 +277,7 @@ on:
       auto_kernel:
         description: "Auto use the latest kernel."
         required: false
-        default: false
+        default: true
         type: boolean
       kernel_repo:
         description: "Set the kernel repository."
@@ -326,7 +326,7 @@ env:
   CI_SET_RELEASE: ${{ github.event.inputs.set_release || 'trixie' }}
   CI_ARMBIAN_BOARD: ${{ github.event.inputs.armbian_board || 'zettlab-d6' }}
   CI_ARMBIAN_KERNEL: ${{ github.event.inputs.armbian_kernel || '6.1.y' }}
-  CI_AUTO_KERNEL: ${{ github.event.inputs.auto_kernel || 'false' }}
+  CI_AUTO_KERNEL: ${{ github.event.inputs.auto_kernel || 'true' }}
   CI_KERNEL_REPO: ${{ github.event.inputs.kernel_repo || 'ophub/kernel' }}
   CI_KERNEL_USAGE: ${{ github.event.inputs.kernel_usage || 'stable' }}
   CI_ARMBIAN_FSTYPE: ${{ github.event.inputs.armbian_fstype || 'ext4' }}
